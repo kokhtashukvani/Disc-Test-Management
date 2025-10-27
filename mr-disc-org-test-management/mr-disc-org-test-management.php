@@ -69,8 +69,10 @@ function mdotm_list_organizations_page() {
         }
     }
     ?>
-    <div class="wrap">
-        <h1><?php echo esc_html__( 'لیست سازمان ها', 'mr-disc-org-test-management' ); ?></h1>
+    <div class="wrap mdotm-wrap">
+        <h1 class="wp-heading-inline"><?php echo esc_html__( 'لیست سازمان ها', 'mr-disc-org-test-management' ); ?></h1>
+        <a href="<?php echo admin_url( 'admin.php?page=mdotm-add-organization' ); ?>" class="page-title-action"><?php echo esc_html__( 'افزودن سازمان', 'mr-disc-org-test-management' ); ?></a>
+        <hr class="wp-header-end">
         <div class="organizations-list">
             <?php
             $organizations = get_users( array( 'role' => 'organization' ) );
@@ -112,6 +114,10 @@ function mdotm_add_organization_page() {
     $user_id = 0;
     $org_data = array();
 
+    if ( isset( $_GET['owner_changed'] ) && $_GET['owner_changed'] == 1 ) {
+        echo '<div class="updated"><p>' . __( 'مالکیت با موفقیت تغییر کرد.', 'mr-disc-org-test-management' ) . '</p></div>';
+    }
+
     if ( isset( $_GET['edit'] ) ) {
         $edit_mode = true;
         $user_id = intval( $_GET['edit'] );
@@ -139,31 +145,71 @@ function mdotm_add_organization_page() {
     }
 
     if ( isset( $_POST['submit'] ) ) {
-        $user_id_select = isset( $_POST['user_id_select'] ) ? intval( $_POST['user_id_select'] ) : 0;
         $user_id = isset( $_POST['user_id'] ) ? intval( $_POST['user_id'] ) : 0;
+        $user_id_select = isset( $_POST['user_id_select'] ) ? intval( $_POST['user_id_select'] ) : 0;
+        $newly_created_user_credentials = null;
 
-        if ( $user_id === 0 && $user_id_select > 0 ) {
-            $user_id = $user_id_select;
-        }
-
-        $username = isset( $_POST['username'] ) ? sanitize_text_field( $_POST['username'] ) : '';
-        $email = isset( $_POST['email'] ) ? sanitize_email( $_POST['email'] ) : '';
-        $password = isset( $_POST['password'] ) ? $_POST['password'] : '';
+        // Sanitize form data
         $org_name_fa = isset( $_POST['org_name_fa'] ) ? sanitize_text_field( $_POST['org_name_fa'] ) : '';
         $org_name_en = isset( $_POST['org_name_en'] ) ? sanitize_text_field( $_POST['org_name_en'] ) : '';
         $test_count = isset( $_POST['test_count'] ) ? intval( $_POST['test_count'] ) : 0;
         $org_logo = isset( $_POST['org_logo'] ) ? esc_url_raw( $_POST['org_logo'] ) : '';
         $bg_color = isset( $_POST['bg_color'] ) ? sanitize_hex_color( $_POST['bg_color'] ) : '';
         $bg_image = isset( $_POST['bg_image'] ) ? esc_url_raw( $_POST['bg_image'] ) : '';
+        $new_password = isset( $_POST['new_password'] ) ? $_POST['new_password'] : '';
+        $new_owner_id = isset( $_POST['new_owner_id'] ) ? intval( $_POST['new_owner_id'] ) : 0;
 
-        if ( $user_id === 0 ) {
-            // Create a new user
-            $user_id = wp_create_user( $username, $password, $email );
+        if ( $edit_mode && $new_owner_id > 0 ) {
+            // Transfer ownership
+            $old_owner_id = $user_id;
+            $user_id = $new_owner_id;
+
+            // Get all meta data from old owner
+            $meta_keys = array( 'org_name_fa', 'org_name_en', 'test_count', 'org_logo', 'bg_color', 'bg_image', 'api_key' );
+            foreach ( $meta_keys as $key ) {
+                $value = get_user_meta( $old_owner_id, $key, true );
+                if ( $value ) {
+                    update_user_meta( $user_id, $key, $value );
+                    delete_user_meta( $old_owner_id, $key );
+                }
+            }
+
+            // Change roles
+            $new_owner = new WP_User( $user_id );
+            $new_owner->set_role( 'organization' );
+
+            $old_owner = new WP_User( $old_owner_id );
+            $old_owner->set_role( 'subscriber' );
+
+            // Redirect to the new owner's edit page
+            wp_redirect( admin_url( 'admin.php?page=mdotm-add-organization&edit=' . $user_id . '&owner_changed=1' ) );
+            exit;
+        }
+
+        if ( $user_id === 0 ) { // Not in edit mode
+            if ( $user_id_select > 0 ) {
+                // Convert existing user
+                $user_id = $user_id_select;
+            } else {
+                // Create a new user with generated credentials
+                $username = sanitize_title( $org_name_fa ) . '-' . wp_rand( 100, 999 );
+                $password = wp_generate_password( 12, true, true );
+                $email = $username . '@' . preg_replace( '/^www\./', '', $_SERVER['SERVER_NAME'] );
+
+                $user_id = wp_create_user( $username, $password, $email );
+
+                if ( ! is_wp_error( $user_id ) ) {
+                    $newly_created_user_credentials = ['username' => $username, 'password' => $password];
+                }
+            }
         }
 
         if ( is_wp_error( $user_id ) ) {
             echo '<div class="error"><p>' . $user_id->get_error_message() . '</p></div>';
         } else {
+            if ( $edit_mode && ! empty( $new_password ) ) {
+                wp_set_password( $new_password, $user_id );
+            }
             // Update user role to organization
             $user = new WP_User( $user_id );
             $user->set_role( 'organization' );
@@ -176,22 +222,43 @@ function mdotm_add_organization_page() {
             update_user_meta( $user_id, 'bg_color', $bg_color );
             update_user_meta( $user_id, 'bg_image', $bg_image );
 
-            if ( ! $edit_mode ) {
-                // Generate and save API key
+            // Generate API key if it doesn't exist (for new users or converted users)
+            if ( ! get_user_meta( $user_id, 'api_key', true ) ) {
                 $api_key = wp_generate_password( 32, false );
                 update_user_meta( $user_id, 'api_key', $api_key );
             }
 
+            // Refresh org data for display after saving
+            $org_data['org_name_fa'] = $org_name_fa;
+            $org_data['org_name_en'] = $org_name_en;
+            $org_data['test_count'] = $test_count;
+            $org_data['org_logo'] = $org_logo;
+            $org_data['bg_color'] = $bg_color;
+            $org_data['bg_image'] = $bg_image;
+            $org_data['api_key'] = get_user_meta( $user_id, 'api_key', true );
+
+
             echo '<div class="updated"><p>' . __( 'سازمان با موفقیت ذخیره شد.', 'mr-disc-org-test-management' ) . '</p></div>';
+
+            if ( $newly_created_user_credentials ) {
+                echo '<div class="notice notice-warning is-dismissible"><p>' . sprintf(
+                    __( 'کاربر جدید با موفقیت ایجاد شد. این اطلاعات را در مکانی امن ذخیره کنید:', 'mr-disc-org-test-management' ) .
+                    '<br/>' . __( 'نام کاربری: %s', 'mr-disc-org-test-management' ) .
+                    '<br/>' . __( 'رمز عبور: %s', 'mr-disc-org-test-management' ),
+                    '<strong>' . esc_html( $newly_created_user_credentials['username'] ) . '</strong>',
+                    '<strong>' . esc_html( $newly_created_user_credentials['password'] ) . '</strong>'
+                ) . '</p></div>';
+            }
         }
     }
 
     ?>
-    <div class="wrap">
+    <div class="wrap mdotm-wrap">
         <h1><?php echo esc_html__( $edit_mode ? 'ویرایش سازمان' : 'افزودن سازمان', 'mr-disc-org-test-management' ); ?></h1>
-        <form method="post" action="">
-            <input type="hidden" name="user_id" value="<?php echo esc_attr( $user_id ); ?>">
-            <table class="form-table">
+        <div class="mdotm-form-container">
+            <form method="post" action="">
+                <input type="hidden" name="user_id" value="<?php echo esc_attr( $user_id ); ?>">
+                <table class="form-table">
                 <?php if ( ! $edit_mode ) : ?>
                 <tr valign="top">
                     <th scope="row"><?php echo esc_html__( 'کاربر', 'mr-disc-org-test-management' ); ?></th>
@@ -206,18 +273,6 @@ function mdotm_add_organization_page() {
                             ?>
                         </select>
                     </td>
-                </tr>
-                <tr valign="top">
-                    <th scope="row"><?php echo esc_html__( 'نام کاربری (برای کاربر جدید)', 'mr-disc-org-test-management' ); ?></th>
-                    <td><input type="text" name="username" /></td>
-                </tr>
-                <tr valign="top">
-                    <th scope="row"><?php echo esc_html__( 'ایمیل (برای کاربر جدید)', 'mr-disc-org-test-management' ); ?></th>
-                    <td><input type="email" name="email" /></td>
-                </tr>
-                <tr valign="top">
-                    <th scope="row"><?php echo esc_html__( 'رمز عبور (برای کاربر جدید)', 'mr-disc-org-test-management' ); ?></th>
-                    <td><input type="password" name="password" /></td>
                 </tr>
                 <?php endif; ?>
                 <tr valign="top">
@@ -246,16 +301,39 @@ function mdotm_add_organization_page() {
                 </tr>
                 <?php if ( $edit_mode ) : ?>
                 <tr valign="top">
+                    <th scope="row"><?php echo esc_html__( 'نام کاربری', 'mr-disc-org-test-management' ); ?></th>
+                    <td><input type="text" readonly value="<?php echo esc_attr( get_userdata( $user_id )->user_login ); ?>" /></td>
+                </tr>
+                <tr valign="top">
+                    <th scope="row"><?php echo esc_html__( 'رمز عبور جدید', 'mr-disc-org-test-management' ); ?></th>
+                    <td><input type="password" name="new_password" /></td>
+                </tr>
+                <tr valign="top">
                     <th scope="row"><?php echo esc_html__( 'API Key', 'mr-disc-org-test-management' ); ?></th>
                     <td>
                         <input type="text" readonly value="<?php echo esc_attr( $org_data['api_key'] ?? '' ); ?>" />
                         <button type="submit" name="regenerate_api_key" class="button"><?php echo esc_html__( 'تولید دوباره', 'mr-disc-org-test-management' ); ?></button>
                     </td>
                 </tr>
+                <tr valign="top">
+                    <th scope="row"><?php echo esc_html__( 'تغییر مالکیت', 'mr-disc-org-test-management' ); ?></th>
+                    <td>
+                        <select name="new_owner_id">
+                            <option value="0"><?php echo esc_html__( 'انتخاب کاربر جدید', 'mr-disc-org-test-management' ); ?></option>
+                            <?php
+                            $users = get_users( array( 'role__not_in' => 'organization', 'exclude' => $user_id ) );
+                            foreach ( $users as $user ) {
+                                echo '<option value="' . esc_attr( $user->ID ) . '">' . esc_html( $user->user_login ) . '</option>';
+                            }
+                            ?>
+                        </select>
+                    </td>
+                </tr>
                 <?php endif; ?>
             </table>
             <?php submit_button( __( 'ذخیره', 'mr-disc-org-test-management' ) ); ?>
-        </form>
+            </form>
+        </div>
     </div>
     <?php
 }
