@@ -346,3 +346,105 @@ function mdotm_admin_enqueue_scripts() {
     wp_enqueue_script( 'mdotm-admin-js', plugin_dir_url( __FILE__ ) . 'js/admin.js', array( 'jquery', 'wp-color-picker' ), '1.0', true );
 }
 add_action( 'admin_enqueue_scripts', 'mdotm_admin_enqueue_scripts' );
+
+// Add custom tab to WooCommerce My Account page
+function mdotm_add_organization_tab_to_my_account( $items ) {
+    $current_user = wp_get_current_user();
+    if ( in_array( 'organization', $current_user->roles ) ) {
+        $new_items = array();
+        $new_items['edit-organization'] = __( 'اطلاعات سازمان', 'mr-disc-org-test-management' );
+        // Add the new item after 'edit-account'
+        $items = array_slice( $items, 0, 2, true ) + $new_items + array_slice( $items, 2, count( $items ) - 1, true );
+    }
+    return $items;
+}
+add_filter( 'woocommerce_account_menu_items', 'mdotm_add_organization_tab_to_my_account' );
+
+// Add custom endpoint for the new tab
+function mdotm_add_organization_endpoint() {
+    add_rewrite_endpoint( 'edit-organization', EP_PAGES );
+}
+add_action( 'init', 'mdotm_add_organization_endpoint' );
+
+// Flush rewrite rules on plugin activation
+function mdotm_flush_rewrite_rules() {
+    mdotm_add_organization_endpoint();
+    flush_rewrite_rules();
+}
+register_activation_hook( __FILE__, 'mdotm_flush_rewrite_rules' );
+
+// Content for the custom tab
+function mdotm_organization_tab_content() {
+    $user_id = get_current_user_id();
+    $org_name_fa = get_user_meta( $user_id, 'org_name_fa', true );
+    $org_name_en = get_user_meta( $user_id, 'org_name_en', true );
+    $org_logo = get_user_meta( $user_id, 'org_logo', true );
+    $bg_color = get_user_meta( $user_id, 'bg_color', true );
+    $bg_image = get_user_meta( $user_id, 'bg_image', true );
+    ?>
+    <div class="woocommerce-MyAccount-content">
+        <h3><?php echo esc_html__( 'اطلاعات سازمان', 'mr-disc-org-test-management' ); ?></h3>
+        <form method="post" action="">
+            <?php wp_nonce_field( 'mdotm_save_organization_details' ); ?>
+            <table class="form-table">
+                <tr valign="top">
+                    <th scope="row"><?php echo esc_html__( '(فارسی) نام سازمان', 'mr-disc-org-test-management' ); ?></th>
+                    <td><input type="text" name="org_name_fa" value="<?php echo esc_attr( $org_name_fa ); ?>" required /></td>
+                </tr>
+                <tr valign="top">
+                    <th scope="row"><?php echo esc_html__( '(انگلیسی) نام سازمان', 'mr-disc-org-test-management' ); ?></th>
+                    <td><input type="text" name="org_name_en" value="<?php echo esc_attr( $org_name_en ); ?>" /></td>
+                </tr>
+                <tr valign="top">
+                    <th scope="row"><?php echo esc_html__( 'لوگو سازمان', 'mr-disc-org-test-management' ); ?></th>
+                    <td><input type="text" name="org_logo" class="logo-url" value="<?php echo esc_attr( $org_logo ); ?>" /><button class="button upload-logo"><?php echo esc_html__( 'آپلود لوگو', 'mr-disc-org-test-management' ); ?></button></td>
+                </tr>
+                <tr valign="top">
+                    <th scope="row"><?php echo esc_html__( 'رنگ بک گراند', 'mr-disc-org-test-management' ); ?></th>
+                    <td><input type="text" name="bg_color" class="color-picker" value="<?php echo esc_attr( $bg_color ); ?>" /></td>
+                </tr>
+                <tr valign="top">
+                    <th scope="row"><?php echo esc_html__( 'تصویر بک گراند', 'mr-disc-org-test-management' ); ?></th>
+                    <td><input type="text" name="bg_image" class="bg-image-url" value="<?php echo esc_attr( $bg_image ); ?>" /><button class="button upload-bg-image"><?php echo esc_html__( 'آپلود تصویر', 'mr-disc-org-test-management' ); ?></button></td>
+                </tr>
+            </table>
+            <?php submit_button( __( 'ذخیره', 'mr-disc-org-test-management' ) ); ?>
+        </form>
+    </div>
+    <?php
+}
+add_action( 'woocommerce_account_edit-organization_endpoint', 'mdotm_organization_tab_content' );
+
+// Handle form submission
+function mdotm_save_organization_details() {
+    if ( isset( $_POST['submit'] ) && isset( $_POST['org_name_fa'] ) ) {
+        if ( ! isset( $_POST['_wpnonce'] ) || ! wp_verify_nonce( $_POST['_wpnonce'], 'mdotm_save_organization_details' ) ) {
+            return;
+        }
+        $user_id = get_current_user_id();
+        $org_name_fa = sanitize_text_field( $_POST['org_name_fa'] );
+        $org_name_en = sanitize_text_field( $_POST['org_name_en'] );
+        $org_logo = esc_url_raw( $_POST['org_logo'] );
+        $bg_color = sanitize_hex_color( $_POST['bg_color'] );
+        $bg_image = esc_url_raw( $_POST['bg_image'] );
+
+        update_user_meta( $user_id, 'org_name_fa', $org_name_fa );
+        update_user_meta( $user_id, 'org_name_en', $org_name_en );
+        update_user_meta( $user_id, 'org_logo', $org_logo );
+        update_user_meta( $user_id, 'bg_color', $bg_color );
+        update_user_meta( $user_id, 'bg_image', $bg_image );
+
+        wc_add_notice( __( 'اطلاعات سازمان با موفقیت ذخیره شد.', 'mr-disc-org-test-management' ), 'success' );
+    }
+}
+add_action( 'init', 'mdotm_save_organization_details' );
+
+// Enqueue scripts and styles for the frontend
+function mdotm_enqueue_scripts() {
+    if ( is_account_page() && is_wc_endpoint_url( 'edit-organization' ) ) {
+        wp_enqueue_media();
+        wp_enqueue_style( 'wp-color-picker' );
+        wp_enqueue_script( 'mdotm-admin-js', plugin_dir_url( __FILE__ ) . 'js/admin.js', array( 'jquery', 'wp-color-picker' ), '1.0', true );
+    }
+}
+add_action( 'wp_enqueue_scripts', 'mdotm_enqueue_scripts' );
